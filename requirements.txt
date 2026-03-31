@@ -1,0 +1,34 @@
+# Core dependencies
+python-dateutil
+numpy
+pandas
+scipy
+
+# Data sources
+yfinance
+fredapi
+google-cloud-bigquery
+db-dtypes
+
+# Machine Learning
+torch
+sentence-transformers
+scikit-learn
+statsmodels
+
+# Explainability
+shap
+
+# Visualization
+matplotlib
+seaborn
+plotly
+
+# Utilities
+pyyaml
+tqdm
+python-dotenv
+
+# Testing
+pytest
+pytest-cov

@@ -1,0 +1,101 @@
+# Configuration file for Geopolitical Defense Equity Study
+
+# Defense company tickers
+tickers:
+  - LMT  # Lockheed Martin
+  - RTX  # Raytheon Technologies
+  - NOC  # Northrop Grumman
+  - GD   # General Dynamics
+  - BA   # Boeing
+  - HII  # Huntington Ingalls Industries
+  - LHX  # L3Harris Technologies
+  - KTOS # Kratos Defense & Security Solutions
+  - PLTR # Palantir Technologies
+
+# Market index
+market_index: SPY
+
+# Date range
+start_date: "2000-01-01"
+end_date: null  # null = today
+
+# Ticker-specific start dates (IPO dates)
+ticker_start_dates:
+  PLTR: "2020-09-30"
+  KTOS: "2009-01-01"
+  HII: "2011-03-31"
+
+# GDELT event filtering
+gdelt:
+  # CAMEO codes for geopolitical events
+  cameo_root_codes:
+    - 13  # Threaten
+    - 16  # Reduce relations / Sanctions
+    - 17  # Coerce
+    - 18  # Assault
+    - 19  # Fight / Conflict
+
+  # Minimum mentions to filter noise
+  min_mentions: 5
+
+  # BigQuery project (set your project ID)
+  bigquery_project: null  # Replace with your GCP project ID
+
+# FRED macro indicators
+fred_indicators:
+  DGS10: "10-Year Treasury Constant Maturity Rate"
+  BAMLH0A0HYM2: "ICE BofA US High Yield Index Option-Adjusted Spread"
+  DTWEXBGS: "Trade Weighted U.S. Dollar Index: Broad, Goods and Services"
+  VIXCLS: "CBOE Volatility Index: VIX"
+  DCOILWTICO: "Crude Oil Prices: West Texas Intermediate (WTI)"
+
+# Event study parameters
+event_study:
+  estimation_window: 150  # Trading days
+  estimation_buffer: 30   # Gap between estimation and event
+  event_window_start: -1  # Days before event
+  event_window_end: 10    # Days after event
+
+# Model parameters
+model:
+  # MLP architecture
+  mlp:
+    hidden_dims: [256, 128, 64]
+    dropout: 0.2
+    activation: "relu"
+
+  # Transformer architecture (if used)
+  transformer:
+    d_model: 128
+    nhead: 4
+    num_layers: 2
+    dim_feedforward: 256
+    dropout: 0.1
+
+  # Training parameters
+  training:
+    learning_rate: 0.001
+    weight_decay: 0.0001
+    batch_size: 32
+    epochs: 100
+    early_stopping_patience: 10
+    loss: "mse"  # or "huber"
+    huber_delta: 1.0
+
+  # Cross-validation
+  cv:
+    type: "walk_forward"
+    test_window_years: 2
+    min_train_years: 10
+
+# Sentence embedding model
+embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+embedding_dim: 384
+
+# Random seed for reproducibility
+random_seed: 42
+
+# Logging
+logging:
+  level: "INFO"
+  log_dir: "logs"
