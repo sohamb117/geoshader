@@ -1,0 +1,62 @@
+import shap
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.datasets import fetch_california_housing
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor
+
+# 1. Load the dataset
+X, y = fetch_california_housing(return_X_y=True, as_frame=True)
+
+# 2. Split the data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42
+)
+
+# 3. Train the model
+model = RandomForestRegressor(n_estimators=100, random_state=42)
+model.fit(X_train, y_train)
+
+# 4. Create the SHAP explainer
+explainer = shap.Explainer(model, X_train)
+
+# 5. Calculate SHAP values for the test set
+shap_values = explainer(X_test)
+
+# 6. Print information for the first sample
+print("Base value for the first sample:")
+print(shap_values.base_values[0])
+
+print("\nSHAP values for the first sample:")
+print(shap_values.values[0])
+
+print("\nOriginal feature values for the first sample:")
+print(X_test.iloc[0])
+
+# 7. Verify that:
+# prediction ≈ base value + sum of SHAP values
+prediction = model.predict(X_test.iloc[[0]])[0]
+reconstructed_prediction = shap_values.base_values[0] + shap_values.values[0].sum()
+
+print("\nModel prediction for the first sample:")
+print(prediction)
+
+print("\nBase value + sum of SHAP values:")
+print(reconstructed_prediction)
+
+# 8. Create a dataframe of mean absolute SHAP values
+feature_importance = pd.DataFrame({
+    "feature": X_test.columns,
+    "mean_absolute_shap_value": np.abs(shap_values.values).mean(axis=0)
+}).sort_values(by="mean_absolute_shap_value", ascending=False)
+
+print("\nFeature importance based on mean absolute SHAP values:")
+print(feature_importance)
+
+# 9. Plot SHAP visualizations
+shap.plots.waterfall(shap_values[0])   # explanation for one sample
+shap.plots.beeswarm(shap_values)       # global explanation
+shap.plots.bar(shap_values)            # feature importance bar plot
+
+plt.show()
