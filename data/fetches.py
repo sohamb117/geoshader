@@ -8,6 +8,8 @@ Usage: python run_pipeline.py
 import subprocess
 import sys
 import time
+import platform
+import shutil
 from pathlib import Path
 
 SCRIPTS = [
@@ -18,6 +20,94 @@ SCRIPTS = [
 ]
 
 SCRIPTS_DIR = Path(__file__).parent
+
+def check_gcloud_installed() -> bool:
+    """Check if gcloud CLI is installed."""
+    return shutil.which("gcloud") is not None
+
+def install_gcloud_sdk():
+    """Install gcloud SDK based on the operating system."""
+    system = platform.system()
+
+    print("\n" + "="*60)
+    print("  Installing Google Cloud SDK...")
+    print("="*60 + "\n")
+
+    if system == "Darwin":  # macOS
+        print("  Detected macOS - installing via Homebrew...")
+        try:
+            # Check if Homebrew is installed
+            if not shutil.which("brew"):
+                print("  [ERROR] Homebrew not found. Please install Homebrew first:")
+                print("  /bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"")
+                sys.exit(1)
+
+            result = subprocess.run(
+                ["brew", "install", "--cask", "google-cloud-sdk"],
+                check=False
+            )
+            if result.returncode != 0:
+                print("  [ERROR] Failed to install gcloud SDK via Homebrew")
+                sys.exit(1)
+            print("  [OK] gcloud SDK installed successfully")
+        except Exception as e:
+            print(f"  [ERROR] Installation failed: {e}")
+            sys.exit(1)
+
+    elif system == "Windows":
+        print("  Detected Windows - please install manually...")
+        print("  Download from: https://cloud.google.com/sdk/docs/install-sdk#windows")
+        print("  Or use PowerShell:")
+        print("  (New-Object Net.WebClient).DownloadFile('https://dl.google.com/dl/cloudsdk/channels/rapid/GoogleCloudSDKInstaller.exe', '$env:Temp\\GoogleCloudSDKInstaller.exe')")
+        print("  & $env:Temp\\GoogleCloudSDKInstaller.exe")
+        print("\n  After installation, restart your terminal and run this script again.")
+        sys.exit(1)
+
+    else:  # Linux or other
+        print(f"  Detected {system} - installing via script...")
+        try:
+            # Download and run the install script
+            result = subprocess.run(
+                ["curl", "https://sdk.cloud.google.com", "|", "bash"],
+                shell=True,
+                check=False
+            )
+            if result.returncode != 0:
+                print("  [ERROR] Failed to install gcloud SDK")
+                sys.exit(1)
+            print("  [OK] gcloud SDK installed successfully")
+            print("  Please restart your terminal and run: exec -l $SHELL")
+        except Exception as e:
+            print(f"  [ERROR] Installation failed: {e}")
+            sys.exit(1)
+
+def authenticate_gcloud():
+    """Run gcloud authentication."""
+    print("\n" + "="*60)
+    print("  Authenticating with Google Cloud...")
+    print("  This will open a browser window for authentication.")
+    print("="*60 + "\n")
+
+    result = subprocess.run(
+        ["gcloud", "auth", "application-default", "login"],
+        check=False
+    )
+
+    if result.returncode != 0:
+        print("\n  [ERROR] Authentication failed")
+        sys.exit(1)
+
+    print("\n  [OK] Authentication successful")
+
+def setup_gcloud():
+    """Ensure gcloud SDK is installed and authenticated."""
+    if not check_gcloud_installed():
+        print("  gcloud SDK not found. Installing...")
+        install_gcloud_sdk()
+    else:
+        print("  [OK] gcloud SDK already installed")
+
+    authenticate_gcloud()
 
 def run_script(script_name: str, label: str) -> bool:
     script_path = SCRIPTS_DIR / script_name
@@ -48,6 +138,9 @@ def run_script(script_name: str, label: str) -> bool:
 def main():
     print("\nDefense Equity Event Study — Data Pipeline")
     print(f"Scripts directory: {SCRIPTS_DIR}\n")
+
+    # Setup gcloud SDK and authenticate
+    setup_gcloud()
 
     results = {}
     for script_name, label in SCRIPTS:
