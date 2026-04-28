@@ -60,22 +60,54 @@ except ImportError:
     logging.warning("google-cloud-bigquery not installed. Install with: pip install google-cloud-bigquery")
 
 
-def build_gdelt1_query(cameo_codes: list, start_date: str, end_date: str, min_mentions: int = 5, limit: int = None) -> str:
+def build_gdelt1_query(cameo_codes: list, start_date: str, end_date: str, min_mentions: int = 5,
+                       min_goldstein: float = None, major_actors: list = None, limit: int = None) -> str:
     """
     Build query for GDELT 1.0 (1979 - Feb 2015).
     Uses the full.events table.
+
+    Args:
+        cameo_codes: List of CAMEO root codes
+        start_date: Start date in YYYY-MM-DD format
+        end_date: End date in YYYY-MM-DD format
+        min_mentions: Minimum mentions threshold
+        min_goldstein: Minimum Goldstein scale (e.g., -8.0 for major negative events)
+        major_actors: List of major actor country codes to filter on (e.g., ['USA', 'CHN', 'RUS'])
+        limit: Optional limit on number of results
     """
     codes_str = ', '.join([f"'{code}'" for code in cameo_codes])
     start_date_int = int(start_date.replace('-', ''))
     end_date_int = int(end_date.replace('-', ''))
 
+    # Build WHERE clauses
+    where_clauses = [
+        f"SQLDATE >= {start_date_int}",
+        f"SQLDATE <= {end_date_int}",
+        f"EventRootCode IN ({codes_str})",
+        f"NumMentions >= {min_mentions}",
+        "Actor1Name IS NOT NULL",
+        "Actor2Name IS NOT NULL"
+    ]
+
+    # Add Goldstein scale filter (more negative = more severe events)
+    if min_goldstein is not None:
+        where_clauses.append(f"GoldsteinScale <= {min_goldstein}")
+
+    # Add major actor filtering
+    if major_actors:
+        actors_str = ', '.join([f"'{actor}'" for actor in major_actors])
+        where_clauses.append(f"(Actor1CountryCode IN ({actors_str}) OR Actor2CountryCode IN ({actors_str}))")
+
+    where_clause = " AND ".join(where_clauses)
     limit_clause = f"LIMIT {limit}" if limit else ""
 
     query = f"""
     SELECT
         SQLDATE as date,
         Actor1Name as actor1,
+        Actor1CountryCode as actor1_country,
         Actor2Name as actor2,
+        Actor2CountryCode as actor2_country,
         EventCode as event_code,
         EventRootCode as event_root_code,
         GoldsteinScale as goldstein_scale,
@@ -85,12 +117,7 @@ def build_gdelt1_query(cameo_codes: list, start_date: str, end_date: str, min_me
     FROM
         `gdelt-bq.full.events`
     WHERE
-        SQLDATE >= {start_date_int}
-        AND SQLDATE <= {end_date_int}
-        AND EventRootCode IN ({codes_str})
-        AND NumMentions >= {min_mentions}
-        AND Actor1Name IS NOT NULL
-        AND Actor2Name IS NOT NULL
+        {where_clause}
     ORDER BY
         SQLDATE DESC
     {limit_clause}
@@ -98,22 +125,54 @@ def build_gdelt1_query(cameo_codes: list, start_date: str, end_date: str, min_me
     return query
 
 
-def build_gdelt2_query(cameo_codes: list, start_date: str, end_date: str, min_mentions: int = 5, limit: int = None) -> str:
+def build_gdelt2_query(cameo_codes: list, start_date: str, end_date: str, min_mentions: int = 5,
+                       min_goldstein: float = None, major_actors: list = None, limit: int = None) -> str:
     """
     Build query for GDELT 2.0 (Feb 2015 onwards).
     Uses the gdeltv2.events table with 15-minute resolution.
+
+    Args:
+        cameo_codes: List of CAMEO root codes
+        start_date: Start date in YYYY-MM-DD format
+        end_date: End date in YYYY-MM-DD format
+        min_mentions: Minimum mentions threshold
+        min_goldstein: Minimum Goldstein scale (e.g., -8.0 for major negative events)
+        major_actors: List of major actor country codes to filter on (e.g., ['USA', 'CHN', 'RUS'])
+        limit: Optional limit on number of results
     """
     codes_str = ', '.join([f"'{code}'" for code in cameo_codes])
     start_date_int = int(start_date.replace('-', ''))
     end_date_int = int(end_date.replace('-', ''))
 
+    # Build WHERE clauses
+    where_clauses = [
+        f"SQLDATE >= {start_date_int}",
+        f"SQLDATE <= {end_date_int}",
+        f"EventRootCode IN ({codes_str})",
+        f"NumMentions >= {min_mentions}",
+        "Actor1Name IS NOT NULL",
+        "Actor2Name IS NOT NULL"
+    ]
+
+    # Add Goldstein scale filter (more negative = more severe events)
+    if min_goldstein is not None:
+        where_clauses.append(f"GoldsteinScale <= {min_goldstein}")
+
+    # Add major actor filtering
+    if major_actors:
+        actors_str = ', '.join([f"'{actor}'" for actor in major_actors])
+        where_clauses.append(f"(Actor1CountryCode IN ({actors_str}) OR Actor2CountryCode IN ({actors_str}))")
+
+    where_clause = " AND ".join(where_clauses)
     limit_clause = f"LIMIT {limit}" if limit else ""
 
     query = f"""
     SELECT
         SQLDATE as date,
         Actor1Name as actor1,
+        Actor1CountryCode as actor1_country,
         Actor2Name as actor2,
+        Actor2CountryCode as actor2_country,
         EventCode as event_code,
         EventRootCode as event_root_code,
         GoldsteinScale as goldstein_scale,
@@ -123,12 +182,7 @@ def build_gdelt2_query(cameo_codes: list, start_date: str, end_date: str, min_me
     FROM
         `gdelt-bq.gdeltv2.events`
     WHERE
-        SQLDATE >= {start_date_int}
-        AND SQLDATE <= {end_date_int}
-        AND EventRootCode IN ({codes_str})
-        AND NumMentions >= {min_mentions}
-        AND Actor1Name IS NOT NULL
-        AND Actor2Name IS NOT NULL
+        {where_clause}
     ORDER BY
         SQLDATE DESC
     {limit_clause}
@@ -246,10 +300,10 @@ def fetch_and_write_streaming(project_id: str, query: str, output_path: Path,
 
 def deduplicate_parquet_file(input_path: Path, output_path: Path, chunk_size: int = 100000) -> int:
     """
-    Deduplicate a parquet file by reading it, deduplicating, and writing to a new file.
+    Deduplicate a parquet file using streaming approach to minimize RAM usage.
 
-    Note: Deduplication requires loading the full dataset into memory to identify duplicates.
-    However, we can read and write in chunks to minimize peak memory usage.
+    Uses a set to track seen event signatures (date, actor1, actor2, event_code)
+    while processing chunks, keeping only the first occurrence of each event.
 
     Args:
         input_path: Path to input parquet file
@@ -259,21 +313,73 @@ def deduplicate_parquet_file(input_path: Path, output_path: Path, chunk_size: in
     Returns:
         Number of rows in deduplicated file
     """
-    logging.info(f"Deduplicating {input_path.name}...")
+    logging.info(f"Deduplicating {input_path.name} (streaming mode for low RAM)...")
 
-    # Read the entire file (needed for deduplication)
-    # For very large files, consider using dask or similar for out-of-core processing
-    df = pd.read_parquet(input_path)
-    logging.info(f"Before deduplication: {len(df):,} rows")
+    seen_events = set()
+    writer = None
+    total_input_rows = 0
+    total_output_rows = 0
 
-    # Deduplicate
-    df = deduplicate_events(df)
-    logging.info(f"After deduplication: {len(df):,} rows")
+    try:
+        # Open parquet file for reading
+        parquet_file = pq.ParquetFile(input_path)
 
-    # Write deduplicated file
-    df.to_parquet(output_path, index=False)
+        # Process in batches
+        for batch_num, batch in enumerate(parquet_file.iter_batches(batch_size=chunk_size)):
+            # Convert to pandas for easier manipulation
+            df_chunk = batch.to_pandas()
+            total_input_rows += len(df_chunk)
 
-    return len(df)
+            # Create event signature for deduplication
+            # Use tuple of (date, actor1, actor2, event_code) as unique identifier
+            df_chunk['_event_sig'] = df_chunk.apply(
+                lambda row: (
+                    str(row['date']),
+                    str(row.get('actor1', '')),
+                    str(row.get('actor2', '')),
+                    str(row.get('event_code', ''))
+                ),
+                axis=1
+            )
+
+            # Filter out duplicates within this chunk and across chunks
+            mask = ~df_chunk['_event_sig'].isin(seen_events)
+            df_dedup = df_chunk[mask].copy()
+
+            # Update seen events
+            seen_events.update(df_dedup['_event_sig'].tolist())
+
+            # Remove temporary signature column
+            df_dedup = df_dedup.drop(columns=['_event_sig'])
+
+            if len(df_dedup) > 0:
+                # Convert back to PyArrow table
+                table = pa.Table.from_pandas(df_dedup, preserve_index=False)
+
+                # Write to output file
+                if writer is None:
+                    writer = pq.ParquetWriter(output_path, table.schema)
+
+                writer.write_table(table)
+                total_output_rows += len(df_dedup)
+
+            # Log progress
+            if (batch_num + 1) % 10 == 0:
+                pct_kept = (total_output_rows / total_input_rows * 100) if total_input_rows > 0 else 0
+                logging.info(f"  Batch {batch_num + 1}: {total_input_rows:,} in, {total_output_rows:,} out ({pct_kept:.1f}% kept)")
+
+    finally:
+        if writer is not None:
+            writer.close()
+
+    duplicates_removed = total_input_rows - total_output_rows
+    pct_removed = (duplicates_removed / total_input_rows * 100) if total_input_rows > 0 else 0
+
+    logging.info(f"Before deduplication: {total_input_rows:,} rows")
+    logging.info(f"After deduplication: {total_output_rows:,} rows")
+    logging.info(f"Removed {duplicates_removed:,} duplicates ({pct_removed:.1f}%)")
+
+    return total_output_rows
 
 
 def fetch_gdelt1_full(project_id: str, cameo_codes: list, start_date: str,
@@ -763,6 +869,10 @@ def fetch_all_gdelt():
     min_mentions = config['gdelt']['min_mentions']
     chunk_size = config['gdelt'].get('chunk_size', 50000)  # Configurable chunk size
 
+    # New filtering parameters for major geopolitical events
+    min_goldstein = config['gdelt'].get('min_goldstein_scale', None)  # e.g., -8.0 for severe events
+    major_actors = config['gdelt'].get('major_actors', None)  # e.g., ['USA', 'CHN', 'RUS', ...]
+
     # Get date range from config
     config_start_date = config['start_date']
     config_end_date = config['end_date'] or datetime.today().strftime('%Y-%m-%d')
@@ -773,6 +883,10 @@ def fetch_all_gdelt():
     logging.info(f"Overall date range: {config_start_date} to {config_end_date}")
     logging.info(f"CAMEO codes: {cameo_codes}")
     logging.info(f"Min mentions: {min_mentions}")
+    if min_goldstein:
+        logging.info(f"Min Goldstein scale: {min_goldstein} (filtering for major events)")
+    if major_actors:
+        logging.info(f"Major actors filter: {major_actors}")
     logging.info(f"Chunk size: {chunk_size:,} rows")
 
     # Output paths
@@ -809,6 +923,8 @@ def fetch_all_gdelt():
                 start_date=gdelt1_start,
                 end_date=gdelt1_end_actual,
                 min_mentions=min_mentions,
+                min_goldstein=min_goldstein,
+                major_actors=major_actors,
                 limit=None
             )
 
@@ -841,6 +957,8 @@ def fetch_all_gdelt():
                 start_date=gdelt2_start_actual,
                 end_date=gdelt2_end,
                 min_mentions=min_mentions,
+                min_goldstein=min_goldstein,
+                major_actors=major_actors,
                 limit=None
             )
 

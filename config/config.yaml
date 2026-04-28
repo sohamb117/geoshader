@@ -35,8 +35,39 @@ gdelt:
     - 18  # Assault
     - 19  # Fight / Conflict
 
-  # Minimum mentions to filter noise
-  min_mentions: 5
+  # Minimum mentions to filter noise (higher = more prominent events)
+  min_mentions: 10
+
+  # Minimum Goldstein scale (more negative = more severe events)
+  # Set to -8.0 to filter for major negative geopolitical events
+  # Range: -10.0 (worst) to +10.0 (best), null = no filtering
+  min_goldstein_scale: -8.0
+
+  # Major actors filter - only include events involving these countries
+  # This focuses on major geopolitical powers and filters out local/regional noise
+  # Use GDELT country codes (ISO 3166-1 alpha-3)
+  major_actors:
+    - USA  # United States
+    - CHN  # China
+    - RUS  # Russia
+    - GBR  # United Kingdom
+    - FRA  # France
+    - DEU  # Germany
+    - JPN  # Japan
+    - IND  # India
+    - ISR  # Israel
+    - IRN  # Iran
+    - PRK  # North Korea
+    - SAU  # Saudi Arabia
+    - TUR  # Turkey
+    - UKR  # Ukraine
+    - SYR  # Syria
+    - AFG  # Afghanistan
+    - IRQ  # Iraq
+    - PAK  # Pakistan
+
+  # BigQuery streaming chunk size (rows per batch)
+  chunk_size: 50000
 
   # BigQuery project (set your project ID)
   bigquery_project: null  # Replace with your GCP project ID
