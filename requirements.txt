@@ -9,6 +9,8 @@ yfinance
 fredapi
 google-cloud-bigquery
 db-dtypes
+pdfplumber
+openpyxl
 
 # Machine Learning
 torch

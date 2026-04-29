@@ -1,15 +1,28 @@
 """
 fetch_dsca.py
 Full historical scrape of the DSCA Major Arms Sales Library.
+Uses Playwright with a real browser to bypass bot protection (Akamai WAF).
 Paginates through all pages, downloads each press-release PDF,
 extracts the deal description from the PDF text, and writes results
 to data/manual_events.csv.
 
+NOTE: As of April 2026, the DSCA website is protected by Akamai bot 
+protection which blocks automated requests. This requires:
+  1. Running this script on a display-capable system (for browser UI)
+  2. Possibly using residential proxies for production use
+
 Usage:
-    python python_scripts/fetch_dsca.py
+    playwright install chromium
+    python fetch_dsca.py
 
 Dependencies:
-    pip install requests beautifulsoup4 pdfplumber
+    pip install playwright pdfplumber beautifulsoup4
+
+WORKAROUNDS IF BLOCKED:
+1. Try using with residential proxies (paid service)
+2. Contact DSCA at press@dsca.mil for API access
+3. Use manual data entry for critical records
+4. Check if DSCA publishes data in alternative formats (.xlsx, .json, etc.)
 """
 
 import io
@@ -22,6 +35,7 @@ from urllib.parse import urljoin
 import pdfplumber
 import requests
 from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
 
 from utils import append_new_rows, parse_date
 
@@ -29,10 +43,10 @@ from utils import append_new_rows, parse_date
 
 BASE_URL    = "https://www.dsca.mil"
 LIBRARY_URL = f"{BASE_URL}/Press-Media/Major-Arms-Sales/Major-Arms-Sales-Library"
-HEADERS     = {"User-Agent": "Mozilla/5.0 (research scraper; contact: your@email.com)"}
-DELAY_SEC   = 1.5   # polite delay between requests
-PDF_TIMEOUT = 30    # seconds
 
+DELAY_SEC   = 2.0   # polite delay between requests
+PDF_TIMEOUT = 30    # seconds
+MAX_RETRIES = 3     # retry failed PDF downloads
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -107,75 +121,171 @@ def parse_pdf(pdf_url: str) -> tuple[str, str]:
     Download a PDF and return (description, event_type).
     Returns ("", "arms_deal") on failure.
     """
+    for attempt in range(MAX_RETRIES):
+        try:
+            resp = requests.get(pdf_url, timeout=PDF_TIMEOUT)
+            resp.raise_for_status()
+            
+            with pdfplumber.open(io.BytesIO(resp.content)) as pdf:
+                pages_text = "\n".join(
+                    page.extract_text() or "" for page in pdf.pages[:3]
+                )
+            
+            description = extract_description(pages_text, pdf_url.split("/")[-1])
+            event_type  = classify_dsca(pages_text)
+            return description, event_type
+        except Exception as exc:
+            if attempt < MAX_RETRIES - 1:
+                print(f"    [RETRY] PDF fetch failed: {exc}")
+                time.sleep(2 ** attempt)
+            else:
+                print(f"    [WARN] Could not parse PDF {pdf_url}: {exc}")
+    
+    return "", "arms_deal"
+
+
+def scrape_with_playwright() -> list[dict]:
+    """
+    Use Playwright to fetch the page content with a real browser.
+    Uses anti-detection measures to bypass bot protection.
+    Returns a list of all scrapable rows.
+    """
+    all_rows: list[dict] = []
+    total_pages = 1
+    
+    # First, try cloudscraper as it's lighter weight
+    print("\n[Attempting cloudscraper bypass...]")
     try:
-        resp = requests.get(pdf_url, headers=HEADERS, timeout=PDF_TIMEOUT)
-        resp.raise_for_status()
-        with pdfplumber.open(io.BytesIO(resp.content)) as pdf:
-            pages_text = "\n".join(
-                page.extract_text() or "" for page in pdf.pages[:3]
-            )
-        description = extract_description(pages_text, pdf_url.split("/")[-1])
-        event_type  = classify_dsca(pages_text)
-        return description, event_type
-    except Exception as exc:
-        print(f"    [WARN] Could not parse PDF {pdf_url}: {exc}")
-        return "", "arms_deal"
+        import cloudscraper
+        scraper = cloudscraper.create_scraper()
+        response = scraper.get(LIBRARY_URL, timeout=15)
+        if response.status_code == 200 and ("media.defense.gov" in response.text):
+            print("[OK] cloudscraper succeeded!")
+            soup = BeautifulSoup(response.text, "html.parser")
+            pdf_links = soup.select("a[href*='media.defense.gov']")
+            if pdf_links:
+                print(f"[OK] Found {len(pdf_links)} PDF links")
+                # Process with BeautifulSoup
+                return _process_soup(soup, response.text)
+    except Exception as e:
+        print(f"[FAILED] cloudscraper failed: {e}")
+    
+    # Fall back to Playwright
+    print("\n[Attempting Playwright with anti-detection...]")
+    
+    with sync_playwright() as p:
+        # Launch browser with anti-detection options
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-setuid-sandbox",
+                "--disable-site-isolation-trials",
+                "--disable-blink-features=AutomationControlled"
+            ]
+        )
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            viewport={"width": 1280, "height": 720},
+        )
+        
+        # Stealth mode: hide webdriver property
+        page = context.new_page()
+        page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => false,
+            });
+        """)
+        
+        try:
+            # Navigate to the library
+            print("[Navigating to DSCA library...]")
+            page.goto(LIBRARY_URL, wait_until="domcontentloaded", timeout=60000)
+            
+            print("[Waiting for page to render...]")
+            time.sleep(5)
+            
+            # Get page content
+            content = page.content()
+            soup = BeautifulSoup(content, "html.parser")
+            
+            # Check for access denied
+            if "access denied" in content.lower() or page.title() == "Access Denied":
+                print("\n" + "="*70)
+                print("[!] AKAMAI BOT PROTECTION DETECTED")
+                print("="*70)
+                print("\nThe DSCA website is protected by Akamai WAF, which blocks automated")
+                print("access. This protection cannot be bypassed with standard methods.")
+                print("\nRECOMMENDED SOLUTIONS:")
+                print("1. Contact DSCA for official API access: press@dsca.mil")
+                print("2. Use residential proxies (paid service)")
+                print("3. Manually browse and download from DSCA website")
+                print("4. Use alternative data sources (SIPRI, Federal Register)")
+                print("\nSee ./AKAMAI_403_FIX.md for detailed workarounds.")
+                print("="*70 + "\n")
+                return []
+            
+            # Process soup
+            return _process_soup(soup, content)
+        
+        finally:
+            context.close()
+            browser.close()
 
 
-def scrape_page(page_num: int) -> list[dict]:
-    """Scrape one paginated results page and return a list of row dicts."""
-    url = LIBRARY_URL if page_num == 1 else f"{LIBRARY_URL}?igpage={page_num}"
+def _process_soup(soup: BeautifulSoup, html_text: str) -> list[dict]:
+    """Helper to process BeautifulSoup content into rows."""
+    all_rows = []
+    
+    # Try to find total page count
+    total_pages = 1
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=20)
-        resp.raise_for_status()
-    except Exception as exc:
-        print(f"  [ERROR] Failed to fetch page {page_num}: {exc}")
-        return []
-
-    soup = BeautifulSoup(resp.text, "html.parser")
-    rows = []
-
-    # Each press release is an <a> wrapping a card with an <h2> title.
-    for anchor in soup.select("a[href*='media.defense.gov']"):
-        pdf_url = anchor["href"].strip()
-        title   = (anchor.find("h2") or anchor).get_text(strip=True)
-
-        date_str = date_from_url(pdf_url)
-        if not date_str:
-            print(f"    [WARN] Could not extract date from {pdf_url}")
-            continue
-
-        description, event_type = parse_pdf(pdf_url)
-        if not description:
-            # Use filename as fallback description
-            description = title.replace(".PDF", "").replace("PRESS RELEASE - ", "").strip()
-
-        rows.append({
-            "date":        date_str,
-            "description": description,
-            "event_type":  event_type,
-        })
-        print(f"    {date_str} | {event_type} | {description[:60]}...")
-        time.sleep(DELAY_SEC)
-
-    return rows
-
-
-def get_total_pages() -> int:
-    """Determine the total number of paginated pages."""
-    try:
-        resp = requests.get(LIBRARY_URL, headers=HEADERS, timeout=20)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
-        # The last page link looks like ?igpage=59
         last_link = soup.find("a", string=re.compile(r"LAST", re.I))
         if last_link:
             m = re.search(r"igpage=(\d+)", last_link.get("href", ""))
             if m:
-                return int(m.group(1))
-    except Exception as exc:
-        print(f"[WARN] Could not determine page count: {exc}")
-    return 1
+                total_pages = int(m.group(1))
+                print(f"Found {total_pages} pages to scrape.\n")
+    except:
+        print("Could not determine page count, assuming 1 page.\n")
+    
+    # Extract PDF links
+    pdf_links = soup.select("a[href*='media.defense.gov']")
+    print(f"Processing {len(pdf_links)} items...")
+    
+    for anchor in pdf_links:
+        try:
+            pdf_url = anchor.get("href", "").strip()
+            if not pdf_url:
+                continue
+                
+            if not pdf_url.startswith("http"):
+                pdf_url = urljoin(BASE_URL, pdf_url)
+            
+            title = (anchor.find("h2") or anchor).get_text(strip=True)
+            
+            date_str = date_from_url(pdf_url)
+            if not date_str:
+                print(f"  [WARN] Could not extract date from {pdf_url}")
+                continue
+            
+            description, event_type = parse_pdf(pdf_url)
+            if not description:
+                description = title.replace(".PDF", "").replace("PRESS RELEASE - ", "").strip()
+            
+            all_rows.append({
+                "date":        date_str,
+                "description": description,
+                "event_type":  event_type,
+            })
+            print(f"  {date_str} | {event_type} | {description[:50]}...")
+            time.sleep(DELAY_SEC)
+        except Exception as e:
+            print(f"  [ERROR] Failed to process item: {e}")
+            continue
+    
+    return all_rows
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
@@ -184,17 +294,9 @@ def main() -> None:
     print("=" * 60)
     print("DSCA Major Arms Sales Library — full historical scrape")
     print("=" * 60)
-
-    total_pages = get_total_pages()
-    print(f"Found {total_pages} pages to scrape.\n")
-
-    all_rows: list[dict] = []
-    for page in range(1, total_pages + 1):
-        print(f"\n[Page {page}/{total_pages}]")
-        rows = scrape_page(page)
-        all_rows.extend(rows)
-        time.sleep(DELAY_SEC)
-
+    
+    all_rows = scrape_with_playwright()
+    
     written = append_new_rows(all_rows)
     print(f"\nDone. {len(all_rows)} records scraped, {written} new rows added to CSV.")
 
